@@ -290,9 +290,24 @@ func (c *Controller) syncRolloutStatusCanary(roCtx *canaryContext) error {
 	}
 
 	// Temp label pods - LUIS
-	if stableRS != nil && newRS != nil {
+	// TODO: not sure yet of correct place to call pod "labeler".
+	if newRS != nil {
 		//if newRS != stableRS {
-		c.getPodsForRS(roCtx)
+		tempLabels := map[string]string{
+			"rollout_stage": "canary",
+		}
+		/// TODO: Need parameter for hasLabel = true, false
+		newRSPods, err := c.getPodsForRS(roCtx, newRS, tempLabels)
+		if err != nil {
+			logCtx.Error("Failure listing labels")
+		} else {
+			err = c.updatePodsLabel(roCtx, newRSPods, tempLabels)
+			if err != nil {
+				logCtx.Error("Failure updating pod labels")
+				return err
+			}
+
+		}
 		//}
 
 	}
@@ -337,7 +352,18 @@ func (c *Controller) syncRolloutStatusCanary(roCtx *canaryContext) error {
 			newStatus.Canary.StableRS = newStatus.CurrentPodHash
 
 			// Remove temporary label added to canary pods - LUIS
-
+			tempLabels := map[string]string{
+				"rollout_stage": "",
+			}
+			newRSPods, err := c.getPodsForRS(roCtx, newRS, tempLabels)
+			if err != nil {
+				logCtx.Error("failure geting pod list for newRS")
+			} else {
+				err = c.removePodsLabel(roCtx, newRSPods, tempLabels)
+				if err != nil {
+					logCtx.Error("failure removing temporary pod labels")
+				}
+			}
 		}
 		roCtx.PauseContext().ClearPauseConditions()
 		newStatus = c.calculateRolloutConditions(roCtx, newStatus)

@@ -2,10 +2,12 @@ package rollout
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -32,17 +34,35 @@ type patchStringValue struct {
 	Value string `json:"value"`
 }
 
-func (c *Controller) updatePodsLabel(roCtx *canaryContext, pods *corev1.PodList) error {
+// splitLabel - Returns a label and its value
+// TODO: Currently only supports one pair. In the future it will support multiple custom labels
+func splitLabel(labelList map[string]string) (string, string, error) {
+	// Get label and value (TODO: Support multiple labels)
+	labelError := errors.New("Empty labels parameter")
+	for labelKey, labelVal := range labelList {
+		labelError = nil
+		return labelKey, labelVal, nil
+	}
+	return "", "", labelError
+
+}
+
+func (c *Controller) updatePodsLabel(roCtx *canaryContext, pods *corev1.PodList, tempLabels map[string]string) error {
 	logCtx := roCtx.Log()
 	var updateErr error
+
+	labelKey, labelVal, labelErr := splitLabel(tempLabels)
+	if labelErr != nil {
+		return labelErr
+	}
 
 	for _, pod := range pods.Items {
 		fmt.Fprintf(os.Stdout, "pod name: %v\n", pod.Name)
 
 		payload := []patchStringValue{{
 			Op:    "replace",
-			Path:  "/metadata/labels/rollout_stage",
-			Value: time.Now().Format("canary"),
+			Path:  "/metadata/labels/" + labelKey,
+			Value: labelVal,
 		}}
 		payloadBytes, _ := json.Marshal(payload)
 
@@ -57,16 +77,21 @@ func (c *Controller) updatePodsLabel(roCtx *canaryContext, pods *corev1.PodList)
 	return updateErr
 }
 
-func (c *Controller) removePodsLabel(roCtx *canaryContext, pods *corev1.PodList) error {
+func (c *Controller) removePodsLabel(roCtx *canaryContext, pods *corev1.PodList, tempLabels map[string]string) error {
 	logCtx := roCtx.Log()
 	var updateErr error
+
+	labelKey, _, labelErr := splitLabel(tempLabels)
+	if labelErr != nil {
+		return labelErr
+	}
 
 	for _, pod := range pods.Items {
 		fmt.Fprintf(os.Stdout, "pod name: %v\n", pod.Name)
 
 		payload := []patchStringValue{{
 			Op:    "remove",
-			Path:  "/metadata/labels/rollout_stage",
+			Path:  "/metadata/labels/" + labelKey,
 			Value: time.Now().Format("canary"),
 		}}
 		payloadBytes, _ := json.Marshal(payload)
@@ -82,16 +107,24 @@ func (c *Controller) removePodsLabel(roCtx *canaryContext, pods *corev1.PodList)
 	return updateErr
 }
 
-func (c *Controller) getPodsForRS(roCtx *canaryContext) (*corev1.PodList, error) {
+func (c *Controller) getPodsForRS(roCtx *canaryContext, rs *appsv1.ReplicaSet, tempLabels map[string]string) (*corev1.PodList, error) {
 
 	r := roCtx.Rollout()
 	logCtx := roCtx.Log()
 	//newRS := roCtx.NewRS()
 	//stableRS := roCtx.StableRS()
 	newStatus := c.calculateBaseStatus(roCtx)
-	newStatus.Selector = metav1.FormatLabelSelector(r.Spec.Selector)
+	//newStatus.Selector = metav1.FormatLabelSelector(r.Spec.Selector)
+	newStatus.Selector = metav1.FormatLabelSelector(rs.Spec.Selector)
 
-	labelSelector := metav1.LabelSelector{MatchLabels: r.Spec.Selector.MatchLabels}
+	labelSelector := metav1.LabelSelector{MatchLabels: rs.Spec.Selector.MatchLabels}
+
+	labelKey, _, labelErr := splitLabel(tempLabels)
+	if labelErr != nil {
+		return &corev1.PodList{}, labelErr
+	}
+
+	//logCtx.Info(newRS)
 
 	//labelSelector.MatchLabels["!luis"] = "canary"
 
@@ -99,7 +132,7 @@ func (c *Controller) getPodsForRS(roCtx *canaryContext) (*corev1.PodList, error)
 
 	// TODO - Investigate if a better way to add multiple selectors with negation.
 	listOptions := metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("!rollout_stage,%v", labels.Set(labelSelector.MatchLabels).String()),
+		LabelSelector: fmt.Sprintf("!%v,%v", labelKey, labels.Set(labelSelector.MatchLabels).String()),
 		Limit:         100,
 	}
 
