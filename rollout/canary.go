@@ -289,6 +289,14 @@ func (c *Controller) syncRolloutStatusCanary(roCtx *canaryContext) error {
 		return c.persistRolloutStatus(roCtx, &newStatus)
 	}
 
+	// Temp label pods - LUIS
+	if stableRS != nil && newRS != nil {
+		//if newRS != stableRS {
+		c.getPodsForRS(roCtx)
+		//}
+
+	}
+
 	if stableRS == nil {
 		msg := fmt.Sprintf("Setting StableRS to CurrentPodHash: StableRS hash: %s", newStatus.CurrentPodHash)
 		logCtx.Info(msg)
@@ -327,6 +335,9 @@ func (c *Controller) syncRolloutStatusCanary(roCtx *canaryContext) error {
 			newStatus.StableRS = newStatus.CurrentPodHash
 			//TODO(dthomson) Remove in v0.9.0
 			newStatus.Canary.StableRS = newStatus.CurrentPodHash
+
+			// Remove temporary label added to canary pods - LUIS
+
 		}
 		roCtx.PauseContext().ClearPauseConditions()
 		newStatus = c.calculateRolloutConditions(roCtx, newStatus)
